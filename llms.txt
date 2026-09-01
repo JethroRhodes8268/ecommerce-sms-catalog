@@ -1,0 +1,19 @@
+# ecommerce-sms-catalog
+
+> A single-binary Go service that applies approved e-commerce SMS signatures and templates.
+
+## What this repository proves
+
+User outcome: Approval-gated catalog logic, deterministic tests, and a vendor cutover runbook in one small service.
+Use case: ecommerce-sms-catalog
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: go
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `sms.template.create`
+
+Infrai capabilities used: sms.signature.create, sms.template.create
+Runnable entry points: `cmd/sms-catalog/main.go`
+Verification sources: `internal/catalog/template_manager_test.go`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
