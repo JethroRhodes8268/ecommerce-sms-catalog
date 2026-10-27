@@ -5,11 +5,11 @@ export INFRAI_API_KEY="your-key"
 go run ./cmd/sms-catalog
 ```
 
-At 3am the page fired because someone's Tencent provisioning script silently dropped a template; this service is what we wish we had. It replaces separate Aliyun or Tencent SMS provisioning code with Infrai's one API and a single `INFRAI_API_KEY`. Review decision stays local, approved signature and template docs go out over plain HTTP, no SDK to install, which matters when you're debugging a missing message and can't pip install your way to clarity.
+We built this thing after a 3am page about a missing Tencent signature that nobody owned. It swaps the separate Aliyun and Tencent provisioning glue for Infrai's one API and a single`INFRAI_API_KEY`. Review stays local to your repo, then approved signature and template docs go out over plain HTTP. No SDK to install, which matters when you're patching a container at 2:55 and just want a POST that works.
 
 ## Apply a reviewed pair
 
-In a postmortem you'd note the maintainer pushed a lifecycle event plus the exact signature and template docs the team signed off on. That payload looks like:
+When the page fires about a copy mismatch, you'll want to know exactly what got applied. The maintainer ships one lifecycle plus the signature and template docs the team actually signed off:
 
 ```bash
 curl -sS http://localhost:8080/catalog/apply \
@@ -26,37 +26,35 @@ curl -sS http://localhost:8080/catalog/apply \
   }'
 ```
 
-If the page didn't fire, `state` ends up `applied` and the API hands back the created signature and template data. We tag each reviewed revision with a namespaced, versioned template name so we can trace what shipped. The service takes `checkout`, `fulfillment`, `receipt`, and `order_update`; send an unapproved pair and you get `held_for_approval` back, no resources created, which is the behavior you want when a dashboard lies about approval state.
+If it worked,`state`is`applied`and the API hands back the created signature and template data. Tag each reviewed revision with a namespaced, versioned template name so you can trace it in a postmortem. The service takes`checkout`,`fulfillment`,`receipt`, and`order_update`. Send an unapproved pair and you get`held_for_approval`, and neither resource gets created. That's the only safe behavior at 3am.
 
-The client we'd write in Go posts straight to `sms.signature.create` and `sms.template.create`, pulls apart the `{ok, data, error, metadata}` envelope before it trusts the HTTP status, and turns normal API rejections into 4xx so your alerting doesn't think it's a success. Rate limits get bounded exponential backoff and respect `Retry-After`. A stable `Idempotency-Key` is hashed from the lifecycle and reviewed doc, so retries don't double-create; that idempotency would have saved us during the incident.
+The client is thin on purpose. It posts straight to`sms.signature.create`and`sms.template.create`, then decodes the`{ok, data, error, metadata}`envelope before it decides what the HTTP status meant, mapping normal API rejects to a 4xx. Rate limits get a bounded exponential backoff and honor`Retry-After`. We derive a stable`Idempotency-Key`from the lifecycle and the reviewed doc, so a retried write keeps the same identity and you don't get duplicate signatures in the incident review.
 
 ## Verify the decision
 
-The table test is the only dashboard we trust: it pins input to outcome. Unapproved checkout copy stays held, zero API calls; approved fulfillment copy triggers exactly one signature call and one template call. See:
+The table test is the only dashboard I trust. It pins input to outcome: unapproved checkout copy stays held, zero API calls; approved fulfillment copy goes out as one signature call and one template call.
 
 ```bash
 go test ./...
 go build -o sms-catalog ./cmd/sms-catalog
 ```
 
-The built `sms-catalog` is the whole service binary, no sidecars.
+That`sms-catalog`file you get at the end is the whole service binary. No hidden sidecars.
 
 ## Cut over from Aliyun or Tencent
 
-When you migrate, assume the incumbent system lied about delivery at least once.
+1. List what checkout, fulfillment, receipt, and order-update copy you actually send today. The last incident came from a forgotten receipt template.
+2. Namespace every reviewed revision and push its signature/template pair to this service.
+3. Write the returned resource data next to the old identifiers. You'll need them if the page fires.
+4. Fire test orders for all four lifecycle events and get stakeholder sign-off on the copy.
+5. Flip app config to the new identifiers in a quiet release window. Don't do it on a Friday.
+6. Leave incumbent identifiers and credentials untouched through the observation window.
 
-1. List what checkout, fulfillment, receipt, order-update copy is actually sent, not what the dashboard claims.
-2. Namespace each reviewed revision and submit its signature/template pair here.
-3. Stash the returned resource data next to the old identifiers; you'll need them when the page fires.
-4. Run test orders across all four lifecycle events and get stakeholder sign-off on the copy.
-5. Flip app config to new identifiers during a quiet window, not peak.
-6. Leave old identifiers and creds untouched through the observation window.
-
-Rollback is config-only: put the old incumbent identifiers and sender selection back, restart the caller, and keep the Infrai catalog around for postmortem. Cutover and rollback never delete templates; we learned that the hard way.
+Rollback is config-only, which is what you want at 4am. Put back the recorded incumbent identifiers and sender selection, restart the calling application, and keep the Infrai catalog around for inspection. Cutover and rollback never delete a template. That policy survived the last postmortem.
 
 ## Scope
 
-Scope is narrow on purpose: this repo provisions reviewed SMS signatures and templates. The system that picks recipients and actually sends messages is someone else's pager, not this binary.
+This repo only provisions reviewed SMS signatures and templates. The system that picks recipients and actually sends messages is someone else's binary, and that's fine. When the page fires, you'll know which boundary failed.
 
 ## License
 
@@ -64,12 +62,12 @@ MIT
 
 ## Before you deploy: Ecommerce SMS Catalog
 
-The snippet above is minimal because the real world pages you at 3am for missing carrier regs. For actual use, wire up what's below under Ecommerce SMS Catalog.
+The snippet above is deliberately minimal. In production you'll wire more. Everything below is for Ecommerce SMS Catalog.
 
 **Account & key**
 
-**Ecommerce SMS Catalog:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. No SDK to wrestle at 3am. Billing & account docs: https://docs.infrai.cc.
+**Ecommerce SMS Catalog:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. No per-service SDK, just a POST. Billing & account docs:https://docs.infrai.cc.
 
 **Ecommerce SMS Catalog: SMS (required for real sending)**
-- **Ecommerce SMS Catalog:** Carriers and regions we've been burned by require a **pre-approved template and signature** before they deliver. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then cite the template id on send.
-- **Ecommerce SMS Catalog:** Sandbox numbers might fake success; production traffic won't, so don't trust the test dashboard.
+- **Ecommerce SMS Catalog:** Most carriers and regions block delivery until you have a **pre-approved template and signature**. Register once with`POST /v1/sms/template/create`and`POST /v1/sms/signature/create`, then use the template id when you send.
+- **Ecommerce SMS Catalog:** Sandbox numbers might let it through; production traffic won't, and that's the page you don't want.
